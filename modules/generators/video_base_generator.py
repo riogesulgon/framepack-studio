@@ -31,7 +31,7 @@ class VideoBaseModelGenerator(BaseModelGenerator):
         self.full_video_latents = None # For context, set by worker() when available
         self.resolution = 640  # Default resolution
         self.no_resize = False  # Default to resize
-        self.vae_batch_size = 16  # Default VAE batch size
+        self.vae_batch_size = self.settings.get("vae_batch_size", 16) if self.settings else 16
         
         # Import decord and tqdm here to avoid import errors if not installed
         try:
@@ -272,7 +272,7 @@ class VideoBaseModelGenerator(BaseModelGenerator):
     # which are not needed for Video models without end frame processing.
     # But these should be inexpensive and it's easier to keep the code uniform.
     @torch.no_grad()
-    def video_encode(self, video_path, resolution, no_resize=False, vae_batch_size=16, device=None, input_files_dir=None):
+    def video_encode(self, video_path, resolution, no_resize=False, vae_batch_size=None, device=None, input_files_dir=None):
         """
         Encode a video into latent representations using the VAE.
         
@@ -296,6 +296,8 @@ class VideoBaseModelGenerator(BaseModelGenerator):
             - end_of_input_video_image_np: Last frame as numpy array
             - input_frames_resized_np: All input frames resized and center cropped as numpy array (T, H, W, C)
         """
+        if vae_batch_size is None:
+            vae_batch_size = self.vae_batch_size
         encoding = True  # Flag to indicate this is for encoding
         input_frames_resized_np, fps, target_height, target_width = self.extract_video_frames(encoding, video_path, resolution, no_resize, input_files_dir)
 

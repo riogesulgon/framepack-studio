@@ -245,7 +245,7 @@ def worker(
             # Unload everything *except* the potentially active transformer
             unload_complete_models(text_encoder, text_encoder_2, image_encoder, vae)
             if studio_module.current_generator is not None and studio_module.current_generator.transformer is not None:
-                offload_model_from_device_for_memory_preservation(studio_module.current_generator.transformer, target_device=gpu, preserved_memory_gb=8)
+                offload_model_from_device_for_memory_preservation(studio_module.current_generator.transformer, target_device=gpu, preserved_memory_gb=settings.get("gpu_memory_preservation", 8))
 
 
         # --- Model Loading / Switching ---
@@ -362,7 +362,7 @@ def worker(
                 video_path=job_params['input_image'],  # For Video model, input_image contains the video path
                 resolution=job_params['resolutionW'],
                 no_resize=False,
-                vae_batch_size=16,
+                vae_batch_size=settings.get("vae_batch_size", 16),
                 device=gpu,
                 input_files_dir=job_params['input_files_dir']
             )
@@ -888,7 +888,7 @@ def worker(
             if not high_vram:
                 if selected_loras:
                     studio_module.current_generator.move_lora_adapters_to_device(cpu)
-                offload_model_from_device_for_memory_preservation(studio_module.current_generator.transformer, target_device=gpu, preserved_memory_gb=8)
+                offload_model_from_device_for_memory_preservation(studio_module.current_generator.transformer, target_device=gpu, preserved_memory_gb=settings.get("gpu_memory_preservation", 8))
                 load_model_as_complete(vae, target_device=gpu)
 
             # Get real history latents using the generator

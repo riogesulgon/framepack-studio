@@ -32,8 +32,16 @@ from diffusers_helper.bucket_tools import find_nearest_bucket
 from modules.pipelines.metadata_utils import create_metadata
 from modules import DUMMY_LORA_NAME # Import the constant
 
-from modules.toolbox_app import tb_processor
-from modules.toolbox_app import tb_create_video_toolbox_ui, tb_get_formatted_toolbar_stats
+try:
+    from modules.toolbox_app import tb_processor
+    from modules.toolbox_app import tb_create_video_toolbox_ui, tb_get_formatted_toolbar_stats
+    _toolbox_available = True
+except ImportError as e:
+    print(f"Warning: Toolbox not available ({e}). Post-processing/upscaling disabled.")
+    _toolbox_available = False
+    tb_processor = None
+    tb_create_video_toolbox_ui = lambda *a, **kw: (None, None)
+    tb_get_formatted_toolbar_stats = lambda: ("", "", "")
 from modules.xy_plot_ui import create_xy_plot_ui, xy_plot_process
 
 # Define the dummy LoRA name as a constant
@@ -48,7 +56,8 @@ def create_interface(
     settings,
     default_prompt: str = '[1s: The person waves hello] [3s: The person jumps up and down] [5s: The person does a dance]',
     lora_names: list = [],
-    lora_values: list = []
+    lora_values: list = [],
+    low_vram: bool = False
 ):
     """
     Create the Gradio interface for the video generation application
@@ -928,6 +937,9 @@ def create_interface(
             with gr.Tab("Settings"):
                 with gr.Row():
                     with gr.Column():
+                        if low_vram:
+                            gr.Markdown("⚠️ **Low VRAM Detected (6GB or less).** Memory-saving overrides are active: gpu_memory_preservation=1.0, MagCache forced to aggressive settings. Expect slower generation. Consider keeping resolutions at 640×640 or lower, and latent_window_size ≤ 9.")
+                        
                         save_metadata = gr.Checkbox(
                             label="Save Metadata", 
                             info="Save to JSON file", 
@@ -935,13 +947,13 @@ def create_interface(
                         )
                         gpu_memory_preservation = gr.Slider(
                             label="Memory Buffer for Stability (VRAM GB)",
-                            minimum=1,
+                            minimum=0.5,
                             maximum=128,
                             step=0.1,
-                            value=settings.get("gpu_memory_preservation", 6),
+                            value=settings.get("gpu_memory_preservation", 3),
                             info="Increase reserve if you see computer freezes, stagnant generation, or super slow sampling steps (try 1G at a time).\
                                  Otherwise smaller buffer is faster. Some models and lora need more buffer than others. \
-                                 (5.5 - 8.5 is a common range)"
+                                 (5.5 - 8.5 is a common range). For 6-8GB cards, try 0.5-1.5. Lower values are faster but risk OOM."
                         )
                         mp4_crf = gr.Slider(
                             label="MP4 Compression",
@@ -1140,8 +1152,10 @@ def create_interface(
 
                         def manual_cleanup_handler():
                             """UI handler for the manual cleanup button."""
-                            # This directly calls the toolbox_processor's cleanup method and returns the summary string.
-                            summary = tb_processor.tb_clear_temporary_files()
+                            if tb_processor is not None:
+                                summary = tb_processor.tb_clear_temporary_files()
+                            else:
+                                summary = "Toolbox not available (missing dependencies)."
                             return summary
 
                         cleanup_btn.click(

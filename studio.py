@@ -128,9 +128,11 @@ else:
 
 free_mem_gb = get_cuda_free_memory_gb(gpu)
 high_vram = free_mem_gb > 60
+low_vram = free_mem_gb <= 6  # RTX 2060 / 6GB class cards
 
 print(f'Free VRAM {free_mem_gb} GB')
 print(f'High-VRAM Mode: {high_vram}')
+print(f'Low-VRAM Mode: {low_vram}')
 
 # Load models
 text_encoder = LlamaModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder', torch_dtype=torch.float16).cpu()
@@ -204,13 +206,30 @@ if settings.get("auto_cleanup_on_startup", False):
     print("--- Running Automatic Startup Cleanup ---")
     
     # Import the processor instance
-    from modules.toolbox_app import tb_processor
-    
-    # Call the single cleanup function and print its summary.
-    cleanup_summary = tb_processor.tb_clear_temporary_files()
+    try:
+        from modules.toolbox_app import tb_processor
+        cleanup_summary = tb_processor.tb_clear_temporary_files()
+    except ImportError as e:
+        print(f"Skipping startup cleanup: toolbox not available ({e})")
+        cleanup_summary = "(toolbox disabled)"
     print(f"{cleanup_summary}") # This cleaner print handles the multiline string well
     
     print("--- Startup Cleanup Complete ---")
+
+# --- Auto-configure for low VRAM (e.g. RTX 2060 / 6GB) ---
+if low_vram:
+    print("Low VRAM detected: applying memory-saving overrides...")
+    settings.set("gpu_memory_preservation", 1.0)
+    settings.set("vae_batch_size", 4)
+    # Force MagCache with aggressive settings via defaults stored in settings
+    if settings.get("cache_type", "MagCache") != "MagCache":
+        settings.set("cache_type", "MagCache")
+    settings.set("magcache_threshold", 0.05)
+    settings.set("magcache_max_consecutive_skips", 3)
+    settings.set("magcache_retention_ratio", 0.15)
+    print(f"  gpu_memory_preservation = 1.0 (was {settings.settings.get('gpu_memory_preservation', 'N/A')})")
+    print(f"  vae_batch_size = 4")
+    print(f"  MagCache: threshold=0.05, max_skips=3, retention=0.15")
         
 # --- Populate LoRA names AFTER settings are loaded ---
 lora_folder_from_settings: str = settings.get("lora_dir", default_lora_folder) # Use setting, fallback to default
@@ -692,7 +711,8 @@ interface = create_interface(
     load_lora_file_fn=load_lora_file,
     job_queue=job_queue,
     settings=settings,
-    lora_names=lora_names # Explicitly pass the found LoRA names
+    lora_names=lora_names, # Explicitly pass the found LoRA names
+    low_vram=low_vram
 )
 
 # Launch the interface
