@@ -94,7 +94,7 @@ class FramePackClient:
         First checks /gradio_api/info, then falls back to /api/predict/.
         Uses input-parameter count matching to identify the correct endpoint.
         """
-        # Expected parameter count: model_type + len(PARAMETER_META) + lora_slider_values
+        # Expected parameter count: model_type + len(PARAMETER_META) + 1 (lora_weights_dict)
         target_count = get_parameter_count(lora_count)
 
         # Try /gradio_api/info (Gradio 5.x)
@@ -284,7 +284,7 @@ class FramePackClient:
             # Parameter mismatch — try re-discovery with actual param count
             self.log(f"422 error — re-discovering endpoint with {len(params)} params")
             self._endpoint = None
-            self.discover_endpoint(lora_count=max(0, len(params) - 1 - len(PARAMETER_META)))
+            self.discover_endpoint(lora_count=max(0, len(params) - 1 - len(PARAMETER_META) - 1))  # -1 for lora_weights_dict
             call_url = f"{self.server}/gradio_api/call{self._endpoint}"
             r = self._session.post(call_url, json=payload, timeout=30)
 
@@ -595,8 +595,8 @@ class FramePackClient:
                 "lora_names_states": kwargs.get("lora_names_states", []),
             }
 
-            lora_slider_values = kwargs.get("lora_slider_values", None)
-            params_list = build_params_list(model_type, params_dict, lora_slider_values)
+            lora_weights_dict = kwargs.get("lora_weights_dict", None)
+            params_list = build_params_list(model_type, params_dict, lora_weights_dict)
 
             # 5. Submit job
             try:
@@ -605,8 +605,7 @@ class FramePackClient:
                 # Retry with endpoint re-discovery using exact param count
                 self.log(f"Initial submit failed ({e}). Re-discovering endpoint...")
                 self._endpoint = None
-                actual_lora_count = len(lora_slider_values) if lora_slider_values else 0
-                self.discover_endpoint(lora_count=actual_lora_count)
+                self.discover_endpoint()
                 event_id = self.submit_job(params_list)
 
             result["event_id"] = event_id
@@ -849,9 +848,9 @@ def build_params_from_args(args: argparse.Namespace) -> Dict[str, Any]:
                 raise ValueError(
                     f"LoRA value count ({len(values)}) must match LoRA count ({len(lora_names)})"
                 )
-            params["lora_slider_values"] = values
+            params["lora_weights_dict"] = dict(zip(lora_names, values))
         else:
-            params["lora_slider_values"] = [1.0] * len(lora_names)
+            params["lora_weights_dict"] = {name: 1.0 for name in lora_names}
 
     # Ensure no-wait disables long timeout
     if args.no_wait:
@@ -902,20 +901,18 @@ def main():
             if k not in ("input_image", "input_video", "end_frame_image") and k in params:
                 params_dict[k] = params[k]
 
-        lora_slider_values = params.get("lora_slider_values")
+        lora_weights_dict = params.get("lora_weights_dict")
         params_list = build_params_list(
             params.get("model_type", "Original"),
             params_dict,
-            lora_slider_values,
+            lora_weights_dict,
         )
 
         try:
             event_id = client.submit_job(params_list)
         except RuntimeError as e:
             client._endpoint = None
-            client.discover_endpoint(
-                lora_count=len(lora_slider_values) if lora_slider_values else 0
-            )
+            client.discover_endpoint()
             event_id = client.submit_job(params_list)
 
         print(json.dumps({

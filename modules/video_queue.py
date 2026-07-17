@@ -340,35 +340,36 @@ class VideoJobQueue:
                     selected_loras = [selected_loras] if selected_loras is not None else []
                 
                 # Get LoRA values if available
-                lora_values = job.params.get("lora_values", [])
-                if not isinstance(lora_values, list):
-                    lora_values = [lora_values] if lora_values is not None else []
-                
-                # Get loaded LoRA names
-                lora_loaded_names = job.params.get("lora_loaded_names", [])
-                if not isinstance(lora_loaded_names, list):
-                    lora_loaded_names = [lora_loaded_names] if lora_loaded_names is not None else []
+                lora_values = job.params.get("lora_values", {})
                 
                 # Create LoRA data dictionary
-                lora_data = {}
-                for lora_name in selected_loras:
-                    try:
-                        # Find the index of the LoRA in loaded names
-                        idx = lora_loaded_names.index(lora_name) if lora_loaded_names else -1
-                        # Get the weight value
-                        weight = lora_values[idx] if lora_values and idx >= 0 and idx < len(lora_values) else 1.0
-                        # Handle weight as list
-                        if isinstance(weight, list):
-                            weight_value = weight[0] if weight and len(weight) > 0 else 1.0
-                        else:
-                            weight_value = weight
-                        # Store as float
-                        lora_data[lora_name] = float(weight_value)
-                    except (ValueError, IndexError):
-                        # Default weight if not found
-                        lora_data[lora_name] = 1.0
-                    except Exception as e:
-                        print(f"Error processing LoRA {lora_name}: {e}")
+                # lora_values can be either a dict {name: weight} or a list (legacy format)
+                if isinstance(lora_values, dict):
+                    # New dict format: {lora_name: weight}
+                    for lora_name in selected_loras:
+                        lora_data[lora_name] = float(lora_values.get(lora_name, 1.0))
+                elif isinstance(lora_values, list):
+                    # Legacy list format: positional values matching lora_loaded_names
+                    lora_loaded_names = job.params.get("lora_loaded_names", [])
+                    if not isinstance(lora_loaded_names, list):
+                        lora_loaded_names = [lora_loaded_names] if lora_loaded_names is not None else []
+                    for lora_name in selected_loras:
+                        try:
+                            idx = lora_loaded_names.index(lora_name) if lora_loaded_names else -1
+                            weight = lora_values[idx] if lora_values and idx >= 0 and idx < len(lora_values) else 1.0
+                            if isinstance(weight, list):
+                                weight_value = weight[0] if weight and len(weight) > 0 else 1.0
+                            else:
+                                weight_value = weight
+                            lora_data[lora_name] = float(weight_value)
+                        except (ValueError, IndexError):
+                            lora_data[lora_name] = 1.0
+                        except Exception as e:
+                            print(f"Error processing LoRA {lora_name}: {e}")
+                            lora_data[lora_name] = 1.0
+                else:
+                    # No lora_values provided, default to 1.0 for all
+                    for lora_name in selected_loras:
                         lora_data[lora_name] = 1.0
                 
                 # Add to serialized params

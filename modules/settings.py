@@ -26,6 +26,8 @@ class Settings:
             "clean_up_videos": True,
             "override_system_prompt": False,
             "auto_cleanup_on_startup": False, # ADDED: New setting for startup cleanup
+            "hf_cache_blob_cleanup": False, # Clean orphaned HuggingFace blob cache files
+            "hf_cache_blob_cleanup_dry_run": True, # Dry-run mode for blob cleanup (safety default)
             "latents_display_top": False, # NEW: Control latents preview position (False = right column, True = top of interface)
             "system_prompt_template": "{\"template\": \"<|start_header_id|>system<|end_header_id|>\\n\\nDescribe the video by detailing the following aspects: 1. The main content and theme of the video.2. The color, shape, size, texture, quantity, text, and spatial relationships of the objects.3. Actions, events, behaviors temporal relationships, physical movement changes of the objects.4. background environment, light, style and atmosphere.5. camera angles, movements, and transitions used in the video:<|eot_id|><|start_header_id|>user<|end_header_id|>\\n\\n{}<|eot_id|>\", \"crop_start\": 95}",
             "startup_model_type": "None",

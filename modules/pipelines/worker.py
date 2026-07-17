@@ -48,10 +48,12 @@ def get_cached_or_encode_prompt(prompt, text_encoder, text_encoder_2, tokenizer,
             prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2
         )
         llama_vec, llama_attention_mask = crop_or_pad_yield_mask(llama_vec, length=512)
-        # Store CPU copies in cache
+        # Move to target device and store CPU copies in cache
+        llama_vec_td = llama_vec.to(target_device)
+        llama_attention_mask_td = llama_attention_mask.to(target_device) if llama_attention_mask is not None else None
+        clip_l_pooler_td = clip_l_pooler.to(target_device)
         prompt_embedding_cache[prompt] = (llama_vec.cpu(), llama_attention_mask.cpu() if llama_attention_mask is not None else None, clip_l_pooler.cpu())
-        # Return embeddings already on the target device (as encode_prompt_conds uses the model's device)
-        return llama_vec, llama_attention_mask, clip_l_pooler
+        return llama_vec_td, llama_attention_mask_td, clip_l_pooler_td
 
 @torch.no_grad()
 def worker(
@@ -312,8 +314,10 @@ def worker(
         
         # THE FOLLOWING CODE SHOULD BE INSIDE THE TRY BLOCK
         if not high_vram:
-            fake_diffusers_current_device(text_encoder, gpu)
-            load_model_as_complete(text_encoder_2, target_device=gpu)
+            # Text encoders stay on CPU in low VRAM mode (loaded without DynamicSwapInstaller)
+            # Prompt encoding runs on CPU; results are moved to GPU afterward
+            # This avoids OOM from moving the 4B Llama model to GPU
+            pass
 
         # PROMPT BLENDING: Pre-encode all prompts and store in a list in order
         unique_prompts = []
@@ -590,6 +594,9 @@ def worker(
             last_step_time = now_time
             avg_step = sum(step_durations) / len(step_durations) if step_durations else 0.0
 
+            # Free GPU parameter copies from DynamicSwapInstaller before next step
+            torch.cuda.empty_cache()
+
             preview = d['denoised']
             from diffusers_helper.hunyuan import vae_decode_fake
             preview = vae_decode_fake(preview)
@@ -838,7 +845,9 @@ def worker(
             if not high_vram:
                 # Unload VAE etc. before loading transformer
                 unload_complete_models(vae, text_encoder, text_encoder_2, image_encoder)
-                move_model_to_device_with_memory_preservation(studio_module.current_generator.transformer, target_device=gpu, preserved_memory_gb=settings.get("gpu_memory_preservation"))
+                # Do NOT call move_model_to_device_with_memory_preservation here!
+                # DynamicSwapInstaller handles per-block GPU loading; pre-loading
+                # all parameters to GPU permanently fills VRAM and causes OOM.
                 if selected_loras:
                     studio_module.current_generator.move_lora_adapters_to_device(gpu)
 
@@ -888,7 +897,9 @@ def worker(
             if not high_vram:
                 if selected_loras:
                     studio_module.current_generator.move_lora_adapters_to_device(cpu)
-                offload_model_from_device_for_memory_preservation(studio_module.current_generator.transformer, target_device=gpu, preserved_memory_gb=settings.get("gpu_memory_preservation", 8))
+                # Do NOT offload transformer here — DynamicSwapInstaller manages
+                # its own parameter lifecycle per-block via cleanup hooks.
+                torch.cuda.empty_cache()
                 load_model_as_complete(vae, target_device=gpu)
 
             # Get real history latents using the generator

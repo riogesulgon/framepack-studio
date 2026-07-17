@@ -30,7 +30,7 @@ PARAMETER_META: OrderedDict[str, tuple] = OD([
     ("seed",                      (6,  2500,    "int",         "Random seed")),
     ("randomize_seed",            (7,  False,   "bool",        "Randomize seed each job")),
     ("total_second_length",       (8,  6,       "float",       "Video length in seconds")),
-    ("latent_window_size",        (9,  9,       "int",         "Latent window size (1–33)")),
+    ("latent_window_size",        (9,  5,       "int",         "Latent window size (1–33)")),
     ("steps",                     (10, 25,      "int",         "Diffusion steps (1–100)")),
     ("cfg",                       (11, 1.0,     "float",       "CFG scale (1.0–3.0)")),
     ("gs",                        (12, 10.0,    "float",       "Distilled CFG scale (1.0–32.0)")),
@@ -45,8 +45,8 @@ PARAMETER_META: OrderedDict[str, tuple] = OD([
     ("latent_type",               (21, "Noise", "str",         "Latent type: Noise, White, Black, Green Screen")),
     ("clean_up_videos",           (22, True,    "bool",        "Clean up intermediate video files")),
     ("selected_loras",            (23, [],      "list",        "List of selected LoRA names")),
-    ("resolutionW",               (24, 640,     "int",         "Width (128–768, step 32)")),
-    ("resolutionH",               (25, 640,     "int",         "Height (128–768, step 32)")),
+    ("resolutionW",               (24, 480,     "int",         "Width (128–768, step 32)")),
+    ("resolutionH",               (25, 480,     "int",         "Height (128–768, step 32)")),
     ("combine_with_source",       (26, True,    "bool",        "Combine with source video (Video models)")),
     ("num_cleaned_frames",        (27, 5,       "int",         "Number of context frames (Video models, 2–10)")),
     ("lora_names_states",         (28, [],      "list",        "All loaded LoRA names (gr.State)")),
@@ -69,7 +69,7 @@ CACHE_TYPES = ["None", "TeaCache", "MagCache"]
 def build_params_list(
     model_type: str,
     params: Dict[str, Any],
-    lora_slider_values: Optional[List[float]] = None,
+    lora_weights_dict: Optional[Dict[str, float]] = None,
 ) -> list:
     """
     Build the flat parameter list in the exact order expected by the Gradio API.
@@ -77,10 +77,10 @@ def build_params_list(
     Args:
         model_type: One of MODEL_TYPES.
         params: Dict of parameter name -> value (keys matching PARAMETER_META).
-        lora_slider_values: Optional list of LoRA weight values, one per loaded LoRA.
+        lora_weights_dict: Optional dict of {lora_name: weight} for LoRA weights.
 
     Returns:
-        A flat list: [model_type, input_image, input_video, ..., lora_slider_values...]
+        A flat list: [model_type, input_image, input_video, ..., lora_weights_dict]
     """
     result = [model_type]
 
@@ -88,15 +88,18 @@ def build_params_list(
         value = params.get(name, default)
         result.append(value)
 
-    if lora_slider_values:
-        result.extend(lora_slider_values)
+    # Append lora_weights_dict as the last parameter
+    if lora_weights_dict:
+        result.append(lora_weights_dict)
+    else:
+        result.append({})
 
     return result
 
 
 def get_parameter_count(lora_count: int = 0) -> int:
-    """Total number of parameters including model_type and dynamic LoRA sliders."""
-    return 1 + len(PARAMETER_META) + lora_count
+    """Total number of parameters including model_type and lora_weights_dict."""
+    return 1 + len(PARAMETER_META) + 1  # +1 for lora_weights_dict
 
 
 def match_endpoint_by_input_count(

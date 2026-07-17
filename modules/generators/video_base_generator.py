@@ -9,6 +9,7 @@ from PIL import Image
 
 from diffusers_helper.models.hunyuan_video_packed import HunyuanVideoTransformer3DModelPacked
 from diffusers_helper.memory import DynamicSwapInstaller
+from diffusers_helper.quantize import install_block_cleanup_hooks as _install_block_cleanup_hooks
 from diffusers_helper.utils import resize_and_center_crop
 from diffusers_helper.bucket_tools import find_nearest_bucket
 from diffusers_helper.hunyuan import vae_encode, vae_decode
@@ -73,9 +74,10 @@ class VideoBaseModelGenerator(BaseModelGenerator):
         self.transformer.to(dtype=torch.bfloat16)
         self.transformer.requires_grad_(False)
         
-        # Set up dynamic swap if not in high VRAM mode
+        # Low VRAM: use DynamicSwapInstaller for CPU offloading
         if not self.high_vram:
             DynamicSwapInstaller.install_model(self.transformer, device=self.gpu)
+            _install_block_cleanup_hooks(self.transformer)
         else:
             # In high VRAM mode, move the entire model to GPU
             self.transformer.to(device=self.gpu)

@@ -5,6 +5,7 @@ import random
 import json
 import os
 import shutil
+from pathlib import PurePath
 from typing import List, Dict, Any, Optional
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
@@ -451,14 +452,14 @@ def create_interface(
                                 total_second_length = gr.Slider(label="Video Length (Seconds)", minimum=1, maximum=120, value=6, step=0.1)
                                 with gr.Row("Resolution"):
                                     resolutionW = gr.Slider(
-                                        label="Width", minimum=128, maximum=768, value=640, step=32, 
+                                        label="Width", minimum=128, maximum=768, value=480, step=32, 
                                         info="Nearest valid width will be used."
                                     )
                                     resolutionH = gr.Slider(
-                                        label="Height", minimum=128, maximum=768, value=640, step=32, 
+                                        label="Height", minimum=128, maximum=768, value=480, step=32, 
                                         info="Nearest valid height will be used."
                                     )
-                                resolution_text = gr.Markdown(value="<div style='text-align:right; padding:5px 15px 5px 5px;'>Selected bucket for resolution: 640 x 640</div>", label="", show_label=False)
+                                resolution_text = gr.Markdown(value="<div style='text-align:right; padding:5px 15px 5px 5px;'>Selected bucket for resolution: 480 x 480</div>", label="", show_label=False)
 
                         # --- START OF REFACTORED XY PLOT SECTION ---
                         xy_plot_components = create_xy_plot_ui(
@@ -590,13 +591,19 @@ def create_interface(
                                         value=[],
                                         info="Select one or more LoRAs to use for this job"
                                     )
-                                    lora_names_states = gr.State(lora_names)
-                                    lora_sliders = {}
-                                    for lora in lora_names:
-                                        lora_sliders[lora] = gr.Slider(
-                                            minimum=0.0, maximum=2.0, value=1.0, step=0.01,
-                                            label=f"{lora} Weight", visible=False, interactive=True
-                                        )
+                                    lora_refresh_btn = gr.Button("🔄", elem_classes="narrow-button")
+                                lora_names_states = gr.State(lora_names)
+                                lora_weights_state = gr.State({})  # {lora_name: weight}
+                                lora_weights_df = gr.Dataframe(
+                                    headers=["LoRA", "Weight"],
+                                    value=[],
+                                    col_count=(2, "fixed"),
+                                    row_count=(0, "dynamic"),
+                                    label="LoRA Weights",
+                                    interactive=True,
+                                    visible=False,
+                                    type="array",
+                                )
                             with gr.Accordion("Latent Image Options", open=False):
                                 latent_type = gr.Dropdown(
                                     ["Noise", "White", "Black", "Green Screen"], label="Latent Image", value="Noise", info="Used as a starting point if no image is provided"
@@ -606,7 +613,7 @@ def create_interface(
                                 gr.Markdown("Settings for precise control of the motion model")
 
                                 with gr.Group(elem_classes="control-group"):
-                                    latent_window_size = gr.Slider(label="Latent Window Size", minimum=1, maximum=33, value=9, step=1, info='Change at your own risk, very experimental')  # Should not change
+                                    latent_window_size = gr.Slider(label="Latent Window Size", minimum=1, maximum=33, value=5, step=1, info='Change at your own risk, very experimental')  # Should not change
                                     gs = gr.Slider(label="Distilled CFG Scale", minimum=1.0, maximum=32.0, value=10.0, step=0.5)
 
                                 gr.Markdown("#### CFG Scale")
@@ -938,7 +945,7 @@ def create_interface(
                 with gr.Row():
                     with gr.Column():
                         if low_vram:
-                            gr.Markdown("⚠️ **Low VRAM Detected (6GB or less).** Memory-saving overrides are active: gpu_memory_preservation=1.0, MagCache forced to aggressive settings. Expect slower generation. Consider keeping resolutions at 640×640 or lower, and latent_window_size ≤ 9.")
+                            gr.Markdown("⚠️ **Low VRAM Detected (6GB or less).** Memory-saving overrides are active: gpu_memory_preservation=1.0, MagCache forced to aggressive settings. Expect slower generation. Consider keeping resolutions at 480×480 or lower, and latent_window_size ≤ 5.")
                         
                         save_metadata = gr.Checkbox(
                             label="Save Metadata", 
@@ -972,6 +979,17 @@ def create_interface(
                             label="Automatically clean up temp folders on startup",
                             value=settings.get("auto_cleanup_on_startup", False),
                             info="If checked, temporary files (inc. post-processing) will be cleaned up when the application starts."
+                        )
+
+                        hf_cache_blob_cleanup = gr.Checkbox(
+                            label="Clean up orphaned HF blob cache files",
+                            value=settings.get("hf_cache_blob_cleanup", False),
+                            info="If checked, unreferenced blob files from HuggingFace model cache will be removed during cleanup."
+                        )
+                        hf_cache_blob_cleanup_dry_run = gr.Checkbox(
+                            label="Dry run only (no deletion) for blob cleanup",
+                            value=settings.get("hf_cache_blob_cleanup_dry_run", True),
+                            info="When checked, orphaned blobs are only reported, not deleted."
                         )
                         
                         latents_display_top = gr.Checkbox(
@@ -1065,7 +1083,7 @@ def create_interface(
                         status = gr.HTML("")
                         cleanup_output = gr.Textbox(label="Cleanup Status", interactive=False)
 
-                        def save_settings(save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val):
+                        def save_settings(save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup_val, hf_cache_blob_cleanup_val, hf_cache_blob_cleanup_dry_run_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val):
                             """Handles the manual 'Save Settings' button click."""
                             # This function is for the manual save button.
                             # It collects all current UI values and saves them.
@@ -1084,6 +1102,8 @@ def create_interface(
                                     mp4_crf=mp4_crf,
                                     clean_up_videos=clean_up_videos,
                                     auto_cleanup_on_startup=auto_cleanup_on_startup_val, # ADDED
+                                    hf_cache_blob_cleanup=hf_cache_blob_cleanup_val,
+                                    hf_cache_blob_cleanup_dry_run=hf_cache_blob_cleanup_dry_run_val,
                                     latents_display_top=latents_display_top_val, # NEW: Added latents display position setting
                                     override_system_prompt=override_system_prompt_value,
                                     system_prompt_template=processed_template,
@@ -1131,7 +1151,7 @@ def create_interface(
                         # REMOVE `cleanup_temp_folder` from the `inputs` list
                         save_btn.click(
                             fn=save_settings,
-                            inputs=[save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown],
+                            inputs=[save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup, hf_cache_blob_cleanup, hf_cache_blob_cleanup_dry_run, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown],
                             outputs=[status]
                         ).then(
                             # NEW: Update latents display layout after manual save
@@ -1172,6 +1192,10 @@ def create_interface(
 
                         # NEW: auto-cleanup temp files on startup checkbox
                         auto_cleanup_on_startup.change(lambda v: handle_individual_setting_change("auto_cleanup_on_startup", v, "Auto Cleanup on Startup"), inputs=[auto_cleanup_on_startup], outputs=[status])
+
+                        # NEW: HF blob cache cleanup checkboxes
+                        hf_cache_blob_cleanup.change(lambda v: handle_individual_setting_change("hf_cache_blob_cleanup", v, "HF Blob Cache Cleanup"), inputs=[hf_cache_blob_cleanup], outputs=[status])
+                        hf_cache_blob_cleanup_dry_run.change(lambda v: handle_individual_setting_change("hf_cache_blob_cleanup_dry_run", v, "HF Blob Cache Dry Run"), inputs=[hf_cache_blob_cleanup_dry_run], outputs=[status])
 
                         # NEW: latents display position setting
                         latents_display_top.change(lambda v: handle_individual_setting_change("latents_display_top", v, "Latents Display Position"), inputs=[latents_display_top], outputs=[status])
@@ -1305,7 +1329,7 @@ def create_interface(
              combine_with_source_arg, 
              num_cleaned_frames_arg,
              lora_names_states_arg,   # This is from lora_names_states (gr.State)
-             *lora_slider_values_tuple # Remaining args are LoRA slider values
+             lora_weights_dict_arg,   # This is from lora_weights_state (gr.State) - dict {name: weight}
             ) = args
             # DO NOT parse the prompt here. Parsing happens once in the worker.
 
@@ -1346,7 +1370,7 @@ def create_interface(
                                 combine_with_source_arg,
                                 num_cleaned_frames_arg,
                                 lora_names_states_arg,
-                                *lora_slider_values_tuple
+                                lora_weights_dict_arg,
                                )
             # If randomize_seed is checked, generate a new random seed for the next job
             new_seed_value = None
@@ -1448,10 +1472,9 @@ def create_interface(
             resolutionH,                # Corresponds to resolutionH_arg
             combine_with_source,        # Corresponds to combine_with_source_arg
             num_cleaned_frames,         # Corresponds to num_cleaned_frames_arg
-            lora_names_states           # Corresponds to lora_names_states_arg
+            lora_names_states,          # Corresponds to lora_names_states_arg
+            lora_weights_state,         # Corresponds to lora_weights_dict_arg
         ]
-        # Add LoRA sliders to the input list
-        ips.extend([lora_sliders[lora] for lora in lora_names])
 
 
         # --- Connect Buttons ---
@@ -1606,10 +1629,9 @@ def create_interface(
             c["axis_x_switch"], c["axis_x_value_text"], c["axis_x_value_dropdown"], 
             c["axis_y_switch"], c["axis_y_value_text"], c["axis_y_value_dropdown"], 
             c["axis_z_switch"], c["axis_z_value_text"], c["axis_z_value_dropdown"],
-            c["lora_selector"]
+            c["lora_selector"],
+            lora_weights_state,
         ]
-        # LoRA sliders are in a dictionary, so we add their values to the list
-        xy_plot_input_components.extend(c["lora_sliders"].values())
 
         # Wire the click handler for the XY Plot button
         xy_plot_process_btn.click(
@@ -1769,29 +1791,106 @@ def create_interface(
         # to update the stats.
 
         # --- Connect LoRA UI ---
-        # Function to update slider visibility based on selection
-        def update_lora_sliders(selected_loras):
-            updates = []
-            # Suppress dummy LoRA from workaround for the single lora bug.
-            # Filter out the dummy LoRA for display purposes in the dropdown
-            actual_selected_loras_for_display = [lora for lora in selected_loras if lora != DUMMY_LORA_NAME]
-            updates.append(gr.update(value=actual_selected_loras_for_display)) # First update is for the dropdown itself
+        # Function to update the LoRA weights Dataframe based on dropdown selection
+        def update_lora_weights(selected_loras, current_weights):
+            """Update the LoRA weights Dataframe when selection changes.
+            Preserves existing weights and defaults new LoRAs to 1.0."""
+            # Suppress dummy LoRA from the dropdown display
+            actual_selected = [lora for lora in selected_loras if lora != DUMMY_LORA_NAME]
 
-            # Need to handle potential missing keys if lora_names changes dynamically
-            # lora_names is from the create_interface scope
-            for lora_name_key in lora_names: # Iterate using lora_names to maintain order
-                 if lora_name_key == DUMMY_LORA_NAME: # Check for dummy LoRA
-                     updates.append(gr.update(visible=False))
-                 else:
-                     # Visibility of sliders should be based on actual_selected_loras_for_display
-                     updates.append(gr.update(visible=(lora_name_key in actual_selected_loras_for_display)))
-            return updates # This list will be correctly ordered
+            # Preserve existing weights; default new ones to 1.0
+            if current_weights is None:
+                current_weights = {}
+            new_weights = {}
+            for lora in actual_selected:
+                new_weights[lora] = current_weights.get(lora, 1.0)
 
-        # Connect the dropdown to the sliders
+            # Build Dataframe rows
+            df_data = [[lora, new_weights[lora]] for lora in actual_selected]
+
+            # Update the dropdown to filter out DUMMY_LORA_NAME from display
+            dropdown_update = gr.update(value=actual_selected)
+            df_update = gr.update(value=df_data, visible=len(actual_selected) > 0)
+            state_update = new_weights
+
+            return dropdown_update, df_update, state_update
+
         lora_selector.change(
-            fn=update_lora_sliders,
-            inputs=[lora_selector],
-            outputs=[lora_selector] + [lora_sliders[lora] for lora in lora_names if lora in lora_sliders]
+            fn=update_lora_weights,
+            inputs=[lora_selector, lora_weights_state],
+            outputs=[lora_selector, lora_weights_df, lora_weights_state]
+        )
+
+        # Sync Dataframe edits back to state when user edits a weight
+        def sync_lora_weights_from_df(df_data, current_weights):
+            """When the user edits the Dataframe, sync changes back to the state dict."""
+            if current_weights is None:
+                current_weights = {}
+            if df_data is not None and len(df_data) > 0:
+                for row in df_data:
+                    if row and len(row) >= 2:
+                        lora_name = row[0]
+                        try:
+                            weight = float(row[1])
+                        except (ValueError, TypeError):
+                            weight = 1.0
+                        current_weights[lora_name] = weight
+            return current_weights
+
+        lora_weights_df.change(
+            fn=sync_lora_weights_from_df,
+            inputs=[lora_weights_df, lora_weights_state],
+            outputs=[lora_weights_state]
+        )
+
+        # --- LoRA Refresh: re-scan the LoRA directory and update the dropdown ---
+        def refresh_lora_list(current_lora_dir, current_selection, current_weights):
+            """Re-scan the LoRA directory for new/removed LoRA files."""
+            lora_folder = current_lora_dir or settings.get("lora_dir", "loras")
+            new_names = []
+            if os.path.isdir(lora_folder):
+                try:
+                    for root, _, files in os.walk(lora_folder):
+                        for file in files:
+                            if file.endswith('.safetensors') or file.endswith('.pt'):
+                                lora_relative_path = os.path.relpath(os.path.join(root, file), lora_folder)
+                                lora_name = str(PurePath(lora_relative_path).with_suffix(''))
+                                new_names.append(lora_name)
+                    # Keep the same DUMMY_LORA_NAME workaround as studio.py
+                    if len(new_names) == 1:
+                        new_names.append(DUMMY_LORA_NAME)
+                except Exception as e:
+                    print(f"Error scanning LoRA directory '{lora_folder}': {e}")
+            else:
+                print(f"LoRA directory not found: {lora_folder}")
+
+            # Preserve current selection that still exists in the new list
+            preserved_selection = [s for s in (current_selection or []) if s in new_names]
+
+            # Preserve weights for LoRAs that still exist
+            if current_weights is None:
+                current_weights = {}
+            preserved_weights = {k: v for k, v in current_weights.items() if k in new_names}
+
+            # Rebuild Dataframe rows from preserved selection and weights
+            df_data = []
+            for lora in preserved_selection:
+                if lora != DUMMY_LORA_NAME:
+                    df_data.append([lora, preserved_weights.get(lora, 1.0)])
+
+            df_visible = len(preserved_selection) > 0
+
+            return (
+                gr.update(choices=new_names, value=preserved_selection),  # lora_selector dropdown
+                new_names,  # lora_names_states
+                preserved_weights,  # lora_weights_state
+                gr.update(value=df_data, visible=df_visible),  # lora_weights_df
+            )
+
+        lora_refresh_btn.click(
+            fn=refresh_lora_list,
+            inputs=[lora_dir, lora_selector, lora_weights_state],
+            outputs=[lora_selector, lora_names_states, lora_weights_state, lora_weights_df]
         )
 
         def apply_preset(preset_name, model_type):
@@ -1811,12 +1910,18 @@ def create_interface(
                 if key in updates:
                     updates[key] = gr.update(value=value)
 
-            # Handle LoRA sliders specifically
-            if 'lora_values' in preset and isinstance(preset['lora_values'], dict):
-                lora_values_dict = preset['lora_values']
-                for lora_name, lora_value in lora_values_dict.items():
-                    if lora_name in updates:
-                        updates[lora_name] = gr.update(value=lora_value)
+            # Handle LoRA weights specifically
+            lora_values_dict = preset.get('lora_values', {})
+            if lora_values_dict and isinstance(lora_values_dict, dict):
+                # Build Dataframe rows and update state
+                selected_loras = list(lora_values_dict.keys())
+                df_data = [[name, lora_values_dict[name]] for name in selected_loras]
+                updates['lora_selector'] = gr.update(value=selected_loras)
+                updates['lora_weights_state'] = lora_values_dict
+                updates['lora_weights_df'] = gr.update(value=df_data, visible=len(selected_loras) > 0)
+            else:
+                updates['lora_weights_state'] = {}
+                updates['lora_weights_df'] = gr.update(value=[], visible=False)
             
             # Convert the dictionary of updates to a list in the correct order
             return [updates[key] for key in ui_components.keys()]
@@ -1844,21 +1949,14 @@ def create_interface(
             args_dict = {keys[i]: args[i] for i in range(len(keys))}
 
             # Build the preset data from the arguments dictionary
-            preset_data = {key: args_dict[key] for key in ui_components.keys() if key not in lora_sliders}
+            preset_data = {key: args_dict[key] for key in ui_components.keys() if key not in ("lora_weights_state", "lora_weights_df")}
 
-            # Handle LoRA values separately
-            selected_loras = args_dict.get("lora_selector", [])
-            lora_values = {}
-            for lora_name in selected_loras:
-                if lora_name in args_dict:
-                    lora_values[lora_name] = args_dict[lora_name]
-            
-            preset_data['lora_values'] = lora_values
-            
-            # Remove individual lora sliders from the top-level preset data
-            for lora_name in lora_sliders:
-                if lora_name in preset_data:
-                    del preset_data[lora_name]
+            # Handle LoRA values separately - store as dict
+            lora_weights = args_dict.get("lora_weights_state", {})
+            if lora_weights and isinstance(lora_weights, dict):
+                preset_data['lora_values'] = lora_weights
+            else:
+                preset_data['lora_values'] = {}
 
             data[model_type][preset_name] = preset_data
 
@@ -1925,7 +2023,7 @@ def create_interface(
             "num_cleaned_frames": num_cleaned_frames,
             # LoRAs
             "lora_selector": lora_selector,
-            **lora_sliders
+            "lora_weights_state": lora_weights_state,
         }
         
         model_type.change(
@@ -2029,8 +2127,9 @@ def create_interface(
         # --- Connect Metadata Loading ---
         # Function to load metadata from JSON file
         def load_metadata_from_json(json_path):
-            # Define the total number of output components to handle errors gracefully
-            num_outputs = 20 + len(lora_sliders)
+            # Fixed number of non-LoRA output components
+            num_base_outputs = 20
+            num_outputs = num_base_outputs + 2  # +2 for lora_weights_state and lora_weights_df
 
             if not json_path:
                 # Return empty updates for all components if no file is provided
@@ -2078,6 +2177,10 @@ def create_interface(
                 print(f"Loaded metadata from JSON: {json_path}")
                 print(f"Model Type: {model_type_val}, Prompt: {prompt_val}, Seed: {seed_val}, LoRAs: {selected_lora_names}")
 
+                # Build Dataframe rows from LoRA weights
+                df_data = [[name, lora_weights[name]] for name in selected_lora_names]
+                df_visible = len(selected_lora_names) > 0
+
                 # Create a list of UI updates
                 updates = [
                     gr.update(value=prompt_val) if prompt_val is not None else gr.update(),
@@ -2102,13 +2205,9 @@ def create_interface(
                     gr.update(value=combine_with_source_val) if combine_with_source_val else gr.update(),
                 ]
 
-                # Update LoRA sliders based on loaded weights
-                for lora in lora_names:
-                    if lora in lora_weights:
-                        updates.append(gr.update(value=lora_weights[lora], visible=True))
-                    else:
-                        # Hide sliders for LoRAs not in the metadata
-                        updates.append(gr.update(visible=False))
+                # Add LoRA weight updates: state dict + Dataframe
+                updates.append(lora_weights)  # lora_weights_state
+                updates.append(gr.update(value=df_data, visible=df_visible))  # lora_weights_df
 
                 return updates
 
@@ -2144,8 +2243,10 @@ def create_interface(
                 teacache_num_steps,
                 teacache_rel_l1_thresh,
                 latent_type,
-                combine_with_source
-            ] + [lora_sliders[lora] for lora in lora_names]
+                combine_with_source,
+                lora_weights_state,
+                lora_weights_df,
+            ]
         )
 
 

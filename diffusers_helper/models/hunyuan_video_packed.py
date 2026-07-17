@@ -148,8 +148,16 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seq
             x = xformers_attn_func(q, k, v)
             return x
 
-        x = torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2)
-        return x
+        try:
+            x = torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2)
+            return x
+        except (torch.OutOfMemoryError, RuntimeError):
+            # Fallback to chunked attention when full SDPA OOMs (e.g. on RTX 2060)
+            print(f"  [OOM fallback] SDPA OOM at seq_len={q.shape[1]}, using chunked attention", flush=True)
+            torch.cuda.empty_cache()
+            x = _chunked_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2)
+            print(f"  [OOM fallback] chunked attention succeeded", flush=True)
+            return x
 
     batch_size = q.shape[0]
     q = q.view(q.shape[0] * q.shape[1], *q.shape[2:])
@@ -163,6 +171,38 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seq
         raise NotImplementedError('No Attn Installed!')
     x = x.view(batch_size, max_seqlen_q, *x.shape[2:])
     return x
+
+
+def _chunked_attention(q, k, v, chunk_size=1024):
+    """
+    Memory-efficient attention computed in chunks over the query sequence.
+    
+    q, k, v shape: (batch, heads, seq, head_dim)
+    Returns: (batch, heads, seq, head_dim)
+    
+    By processing the query in chunks, peak memory is O(chunk_size * seq_len)
+    instead of O(seq_len^2), making it feasible on 6GB VRAM at 480p.
+    """
+    scale = q.shape[-1] ** 0.5
+    batch, heads, seq_len, head_dim = q.shape
+    output = torch.zeros_like(q)
+    
+    for i in range(0, seq_len, chunk_size):
+        end = min(i + chunk_size, seq_len)
+        q_chunk = q[:, :, i:end, :].float()  # (batch, heads, chunk, head_dim)
+        k_float = k.float()
+        v_float = v.float()
+        
+        # attn = q_chunk @ k^T / scale, then softmax
+        attn = torch.matmul(q_chunk, k_float.transpose(-2, -1)) / scale
+        attn = torch.softmax(attn, dim=-1)  # stays float32
+        
+        # out = attn @ v (both float32)
+        output[:, :, i:end, :] = torch.matmul(attn, v_float)
+    
+    return output.to(q.dtype)
+
+
 
 
 class HunyuanAttnProcessorFlashAttnDouble:

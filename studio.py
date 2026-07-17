@@ -30,7 +30,7 @@ from diffusers_helper.hunyuan import encode_prompt_conds, vae_decode, vae_encode
 from diffusers_helper.utils import save_bcthw_as_mp4, crop_or_pad_yield_mask, soft_append_bcthw, resize_and_center_crop, generate_timestamp
 from diffusers_helper.models.hunyuan_video_packed import HunyuanVideoTransformer3DModelPacked
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
-from diffusers_helper.memory import cpu, gpu, get_cuda_free_memory_gb, move_model_to_device_with_memory_preservation, offload_model_from_device_for_memory_preservation, fake_diffusers_current_device, DynamicSwapInstaller, unload_complete_models, load_model_as_complete
+from diffusers_helper.memory import cpu, gpu, get_cuda_free_memory_gb, move_model_to_device_with_memory_preservation, offload_model_from_device_for_memory_preservation, fake_diffusers_current_device, unload_complete_models, load_model_as_complete
 from diffusers_helper.thread_utils import AsyncStream
 from diffusers_helper.gradio.progress_bar import make_progress_bar_html
 from transformers import SiglipImageProcessor, SiglipVisionModel
@@ -185,8 +185,9 @@ default_lora_folder = os.path.join(script_dir, "loras")
 os.makedirs(default_lora_folder, exist_ok=True) # Ensure default exists
 
 if not high_vram:
-    # DynamicSwapInstaller is same as huggingface's enable_sequential_offload but 3x faster
-    DynamicSwapInstaller.install_model(text_encoder, device=gpu)
+    # Low VRAM: keep models on CPU; they'll be moved to GPU temporarily as needed
+    # (text_encoder is 4B params at fp16 and won't fit in 6GB VRAM alongside other models)
+    pass
 else:
     text_encoder.to(gpu)
     text_encoder_2.to(gpu)
@@ -363,9 +364,26 @@ def process(
         input_image_path,
         combine_with_source,
         num_cleaned_frames,
-        *lora_args,
+        lora_loaded_names,
+        lora_weights_dict,
         save_metadata_checked=True,  # NEW: Parameter to control metadata saving
     ):
+    
+    # Auto-cap resolution for low VRAM to prevent attention OOM
+    # RTX 2060 (6GB) uses math SDP backend which is O(n^2) in memory
+    # Safe max: resolution <= 384 and latent_window_size <= 6
+    if low_vram:
+        max_res = 384
+        max_ws = 6
+        orig_res = (resolutionW, resolutionH)
+        orig_ws = latent_window_size
+        if resolutionW > max_res or resolutionH > max_res:
+            resolutionW = min(resolutionW, max_res)
+            resolutionH = min(resolutionH, max_res)
+            print(f"Low VRAM: capped resolution from {orig_res} to ({resolutionW}, {resolutionH})")
+        if latent_window_size > max_ws:
+            latent_window_size = max_ws
+            print(f"Low VRAM: capped window size from {orig_ws} to {latent_window_size}")
     
     # Create a blank black image if no 
     # Create a default image based on the selected latent_type
@@ -428,9 +446,11 @@ def process(
         except Exception as e:
             print(f"Error copying end frame image: {e}")
     
-    # Extract lora_loaded_names from lora_args
-    lora_loaded_names = lora_args[0] if lora_args and len(lora_args) > 0 else []
-    lora_values = lora_args[1:] if lora_args and len(lora_args) > 1 else []
+    # Ensure lora_loaded_names is a list and lora_weights_dict is a dict
+    if lora_loaded_names is None:
+        lora_loaded_names = []
+    if lora_weights_dict is None:
+        lora_weights_dict = {}
     
     # Create job parameters
     job_params = {
@@ -474,11 +494,9 @@ def process(
     # Print teacache parameters for debugging
     print(f"Teacache parameters: use_teacache={use_teacache}, teacache_num_steps={teacache_num_steps}, teacache_rel_l1_thresh={teacache_rel_l1_thresh}")
     
-    # Add LoRA values if provided - extract them from the tuple
-    if lora_values:
-        # Convert tuple to list
-        lora_values_list = list(lora_values)
-        job_params['lora_values'] = lora_values_list
+    # Add LoRA weights dict if provided
+    if lora_weights_dict:
+        job_params['lora_values'] = lora_weights_dict
     
     # Add job to queue
     job_id = job_queue.add_job(job_params)

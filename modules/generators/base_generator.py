@@ -222,7 +222,7 @@ class BaseModelGenerator(ABC):
         
         print(f"Moved all LoRA adapters to {target_device}")
     
-    def load_loras(self, selected_loras: List[str], lora_folder: str, lora_loaded_names: List[str], lora_values: Optional[List[float]] = None):
+    def load_loras(self, selected_loras: List[str], lora_folder: str, lora_loaded_names: List[str], lora_values=None):
         """
         Load LoRAs into the transformer model and applies their weights.
         
@@ -230,7 +230,7 @@ class BaseModelGenerator(ABC):
             selected_loras: List of LoRA base names to load (e.g., ["lora_A", "lora_B"]).
             lora_folder: Path to the folder containing the LoRA files.
             lora_loaded_names: The master list of ALL available LoRA names, used for correct weight indexing.
-            lora_values: A list of strength values corresponding to lora_loaded_names.
+            lora_values: Either a dict {lora_name: weight} or a list of strength values corresponding to lora_loaded_names.
         """
         self.unload_loras()
 
@@ -262,15 +262,20 @@ class BaseModelGenerator(ABC):
             adapter_names.append(adapter_name)
 
             weight = 1.0
-            if lora_values:
-                try:
-                    master_list_idx = lora_loaded_names.index(lora_base_name)
-                    if master_list_idx < len(lora_values):
-                        weight = float(lora_values[master_list_idx])
-                    else:
-                        print(f"Warning: Index mismatch for '{lora_base_name}'. Defaulting to 1.0.")
-                except ValueError:
-                    print(f"Warning: LoRA '{lora_base_name}' not found in master list. Defaulting to 1.0.")
+            if lora_values is not None:
+                if isinstance(lora_values, dict):
+                    # New dict format: {lora_name: weight}
+                    weight = float(lora_values.get(lora_base_name, 1.0))
+                elif isinstance(lora_values, (list, tuple)):
+                    # Legacy list format: positional values matching lora_loaded_names
+                    try:
+                        master_list_idx = lora_loaded_names.index(lora_base_name)
+                        if master_list_idx < len(lora_values):
+                            weight = float(lora_values[master_list_idx])
+                        else:
+                            print(f"Warning: Index mismatch for '{lora_base_name}'. Defaulting to 1.0.")
+                    except ValueError:
+                        print(f"Warning: LoRA '{lora_base_name}' not found in master list. Defaulting to 1.0.")
             
             strengths.append(weight)
         

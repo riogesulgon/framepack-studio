@@ -276,7 +276,12 @@ def save_bcthw_as_mp4(x, output_filename, fps=10, crf=0):
     x = torch.clamp(x.float(), -1., 1.) * 127.5 + 127.5
     x = x.detach().cpu().to(torch.uint8)
     x = einops.rearrange(x, '(m n) c t h w -> t (m h) (n w) c', n=per_row)
-    torchvision.io.write_video(output_filename, x, fps=fps, video_codec='libx264', options={'crf': str(int(crf))})
+    # Use imageio instead of deprecated torchvision.io.write_video
+    import imageio
+    writer = imageio.get_writer(output_filename, fps=fps, codec='libx264', output_params=['-crf', str(int(crf))])
+    for frame in x:
+        writer.append_data(frame.numpy())
+    writer.close()
     return x
 
 

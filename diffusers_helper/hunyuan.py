@@ -4,6 +4,68 @@ from diffusers.pipelines.hunyuan_video.pipeline_hunyuan_video import DEFAULT_PRO
 from diffusers_helper.utils import crop_or_pad_yield_mask
 
 
+def _capture_hidden_states(model, input_ids, attention_mask):
+    """
+    Call the model and capture all hidden states (including intermediate layers).
+    Uses forward hooks as a robust fallback since some Transformers versions
+    may not respect output_hidden_states=True for LlamaModel.
+    """
+    hidden_states_list = []
+    hooks = []
+
+    def make_hook(layer_idx):
+        def hook(module, input, output):
+            # output is the hidden state tensor for this layer
+            hidden_states_list.append(output.detach())
+        return hook
+
+    # Register forward hooks on all decoder layers
+    if hasattr(model, 'model') and hasattr(model.model, 'layers'):
+        # For LlamaForCausalLM style
+        layers = model.model.layers
+    elif hasattr(model, 'layers'):
+        # For LlamaModel style
+        layers = model.layers
+    else:
+        # Fallback: try named_modules for decoder layers
+        layers = []
+        for name, module in model.named_modules():
+            if 'layers' in name and hasattr(module, '__iter__'):
+                layers = module
+                break
+
+    if layers:
+        for i, layer in enumerate(layers):
+            hook = layer.register_forward_hook(make_hook(i))
+            hooks.append(hook)
+
+    try:
+        # Capture embedding output manually
+        embed_out = None
+        if hasattr(model, 'embed_tokens'):
+            embed_out = model.embed_tokens(input_ids).detach()
+        elif hasattr(model, 'model') and hasattr(model.model, 'embed_tokens'):
+            embed_out = model.model.embed_tokens(input_ids).detach()
+
+        outputs = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=False,
+        )
+
+        # Build hidden states tuple: [embed_out, layer_0, layer_1, ..., layer_N]
+        all_hidden = []
+        if embed_out is not None:
+            all_hidden.append(embed_out)
+        all_hidden.extend(hidden_states_list)
+
+        outputs.hidden_states = tuple(all_hidden)
+        return outputs
+    finally:
+        for hook in hooks:
+            hook.remove()
+
+
 @torch.no_grad()
 def encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2, max_length=256):
     assert isinstance(prompt, str)
@@ -82,10 +144,10 @@ def encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokeniz
     llama_attention_mask = llama_inputs.attention_mask.to(text_encoder.device)
     llama_attention_length = int(llama_attention_mask.sum())
 
-    llama_outputs = text_encoder(
+    llama_outputs = _capture_hidden_states(
+        text_encoder,
         input_ids=llama_input_ids,
         attention_mask=llama_attention_mask,
-        output_hidden_states=True,
     )
 
     llama_vec = llama_outputs.hidden_states[-3][:, crop_start:llama_attention_length]

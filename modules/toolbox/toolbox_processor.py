@@ -1814,6 +1814,111 @@ class VideoProcessor:
 
         return f"[{status_icon}] {dir_description:<{LABEL_WIDTH}} : {status_text}"
         
+    def _tb_clean_hf_blob_cache(self):
+        """
+        Clean orphaned blob files from HuggingFace model cache.
+        Orphaned blobs are files in blobs/ directories that are not referenced
+        by any symlink in snapshots/ directories.
+        """
+        LABEL_WIDTH = 32
+        dir_description = "HF Blob Cache Cleanup"
+        status_icon = "✅"
+        status_text = ""
+
+        hf_home = os.environ.get('HF_HOME', '')
+        if not hf_home or not os.path.isdir(hf_home):
+            return f"[ℹ️] {dir_description:<{LABEL_WIDTH}} : HF_HOME not set or not found"
+
+        hub_path = os.path.join(hf_home, 'hub')
+        if not os.path.isdir(hub_path):
+            return f"[ℹ️] {dir_description:<{LABEL_WIDTH}} : hub directory not found at '{hub_path}'"
+
+        dry_run = self.settings.get('hf_cache_blob_cleanup_dry_run', True)
+
+        total_orphans = 0
+        total_orphan_size = 0
+
+        try:
+            model_dirs = [d for d in os.listdir(hub_path) if d.startswith('models--')]
+        except OSError as e:
+            return f"[❌] {dir_description:<{LABEL_WIDTH}} : ERROR reading hub directory: {e}"
+
+        for model_dir in model_dirs:
+            model_path = os.path.join(hub_path, model_dir)
+            blobs_dir = os.path.join(model_path, 'blobs')
+            snapshots_dir = os.path.join(model_path, 'snapshots')
+
+            if not os.path.isdir(blobs_dir):
+                continue
+
+            # Collect referenced blob hashes from all snapshot symlinks
+            referenced_hashes = set()
+            if os.path.isdir(snapshots_dir):
+                try:
+                    for snapshot in os.listdir(snapshots_dir):
+                        snapshot_path = os.path.join(snapshots_dir, snapshot)
+                        if not os.path.isdir(snapshot_path):
+                            continue
+                        for entry in os.listdir(snapshot_path):
+                            entry_path = os.path.join(snapshot_path, entry)
+                            if os.path.islink(entry_path):
+                                target = os.readlink(entry_path)
+                                # Symlink target is like: ../../../blobs/{sha256hash}
+                                blob_hash = os.path.basename(target)
+                                if blob_hash:
+                                    referenced_hashes.add(blob_hash)
+                except OSError:
+                    continue
+
+            # Identify orphaned blobs
+            try:
+                for blob_file in os.listdir(blobs_dir):
+                    blob_path = os.path.join(blobs_dir, blob_file)
+
+                    # Skip .incomplete files (active downloads)
+                    if blob_file.endswith('.incomplete'):
+                        continue
+
+                    # Skip directories
+                    if not os.path.isfile(blob_path):
+                        continue
+
+                    if blob_file not in referenced_hashes:
+                        file_size = os.path.getsize(blob_path)
+                        total_orphans += 1
+                        total_orphan_size += file_size
+
+                        if not dry_run:
+                            try:
+                                os.remove(blob_path)
+                            except OSError:
+                                pass
+            except OSError:
+                continue
+
+        # Format summary
+        if total_orphans == 0:
+            status_text = "No orphaned blobs found"
+        else:
+            size_str = self._format_size(total_orphan_size)
+            action = "found" if dry_run else "removed"
+            status_text = f"{total_orphans} orphaned blob{'s' if total_orphans != 1 else ''} {action} ({size_str})"
+            if dry_run:
+                status_text += " (dry run)"
+
+        return f"[{status_icon}] {dir_description:<{LABEL_WIDTH}} : {status_text}"
+
+    def _format_size(self, size_bytes):
+        """Format byte size to human-readable string."""
+        if size_bytes >= 1073741824:
+            return f"{size_bytes / 1073741824:.1f} GB"
+        elif size_bytes >= 1048576:
+            return f"{size_bytes / 1048576:.1f} MB"
+        elif size_bytes >= 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        else:
+            return f"{size_bytes} B"
+
     def tb_clear_temporary_files(self):
         """
         Clears all temporary file locations and returns a formatted summary string.
@@ -1826,5 +1931,11 @@ class VideoProcessor:
         gradio_temp_dir = self.settings.get("gradio_temp_dir")
         gradio_summary_line = self._tb_clean_directory(gradio_temp_dir, "Gradio temp folder")
 
+        # 3. Clean HF Blob Cache (if enabled)
+        if self.settings.get("hf_cache_blob_cleanup", False):
+            hf_summary_line = self._tb_clean_hf_blob_cache()
+        else:
+            hf_summary_line = "[ℹ️] HF Blob Cache Cleanup             : disabled in settings"
+
         # Join the individual lines into a single string for printing
-        return f"{postproc_summary_line}\n{gradio_summary_line}"
+        return f"{postproc_summary_line}\n{gradio_summary_line}\n{hf_summary_line}"

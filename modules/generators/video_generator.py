@@ -8,7 +8,6 @@ import pathlib
 from PIL import Image
 
 from diffusers_helper.models.hunyuan_video_packed import HunyuanVideoTransformer3DModelPacked
-from diffusers_helper.memory import DynamicSwapInstaller
 from diffusers_helper.utils import resize_and_center_crop
 from diffusers_helper.bucket_tools import find_nearest_bucket
 from diffusers_helper.hunyuan import vae_encode, vae_decode

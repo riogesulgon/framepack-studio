@@ -92,7 +92,7 @@ def xy_plot_process(
     axis_y_switch, axis_y_value_text, axis_y_value_dropdown, 
     axis_z_switch, axis_z_value_text, axis_z_value_dropdown,
     selected_loras,
-    *lora_slider_values
+    lora_weights_dict
     ):
     # print(model_type, input_image, latent_type, 
     #     prompt, blend_sections, steps, total_second_length, 
@@ -155,7 +155,7 @@ def xy_plot_process(
         "resolutionW": resolutionW,
         "resolutionH": resolutionH,
         "lora_loaded_names": lora_names,
-        "lora_values": lora_slider_values
+        "lora_values": lora_weights_dict if lora_weights_dict else {}
     }
 
     def xy_plot_convert_values(type, value_textbox, value_dropdown):
@@ -307,12 +307,17 @@ def create_xy_plot_ui(lora_names, default_prompt, DUMMY_LORA_NAME):
                     value=[],
                     info="Select one or more LoRAs to use for this job"
                 )
-                xy_plot_lora_sliders = {}
-                for lora in lora_names:
-                    xy_plot_lora_sliders[lora] = gr.Slider(
-                        minimum=0.0, maximum=2.0, value=1.0, step=0.01,
-                        label=f"{lora} Weight", visible=False, interactive=True
-                    )
+                xy_plot_lora_weights_state = gr.State({})  # {lora_name: weight}
+                xy_plot_lora_weights_df = gr.Dataframe(
+                    headers=["LoRA", "Weight"],
+                    value=[],
+                    col_count=(2, "fixed"),
+                    row_count=(0, "dynamic"),
+                    label="LoRA Weights",
+                    interactive=True,
+                    visible=False,
+                    type="array",
+                )
         with gr.Accordion("Advanced Parameters", open=False):
             with gr.Row("TeaCache"):
                 xy_plot_use_teacache = gr.Checkbox(label='Use TeaCache', value=True, info='Faster speed, but often makes hands and fingers slightly worse.')
@@ -369,22 +374,45 @@ def create_xy_plot_ui(lora_names, default_prompt, DUMMY_LORA_NAME):
     xy_plot_axis_y_switch.change(fn=xy_plot_axis_change, inputs=[xy_plot_axis_y_switch], outputs=[xy_plot_axis_y_value_text, xy_plot_axis_y_value_dropdown])
     xy_plot_axis_z_switch.change(fn=xy_plot_axis_change, inputs=[xy_plot_axis_z_switch], outputs=[xy_plot_axis_z_value_text, xy_plot_axis_z_value_dropdown])
 
-    def xy_plot_update_lora_sliders(selected_loras):
-        updates = []
-        actual_selected_loras_for_display = [lora for lora in selected_loras if lora != DUMMY_LORA_NAME]
-        updates.append(gr.update(value=actual_selected_loras_for_display))
-
-        for lora_name_key in lora_names:
-                if lora_name_key == DUMMY_LORA_NAME:
-                    updates.append(gr.update(visible=False))
-                else:
-                    updates.append(gr.update(visible=(lora_name_key in actual_selected_loras_for_display)))
-        return updates
+    def xy_plot_update_lora_weights(selected_loras, current_weights):
+        """Update the LoRA weights Dataframe when selection changes."""
+        if current_weights is None:
+            current_weights = {}
+        actual_selected = [lora for lora in selected_loras if lora != DUMMY_LORA_NAME]
+        new_weights = {}
+        for lora in actual_selected:
+            new_weights[lora] = current_weights.get(lora, 1.0)
+        df_data = [[lora, new_weights[lora]] for lora in actual_selected]
+        dropdown_update = gr.update(value=actual_selected)
+        df_update = gr.update(value=df_data, visible=len(actual_selected) > 0)
+        state_update = new_weights
+        return dropdown_update, df_update, state_update
 
     xy_plot_lora_selector.change(
-        fn=xy_plot_update_lora_sliders,
-        inputs=[xy_plot_lora_selector],
-        outputs=[xy_plot_lora_selector] + [xy_plot_lora_sliders[lora] for lora in lora_names if lora in xy_plot_lora_sliders]
+        fn=xy_plot_update_lora_weights,
+        inputs=[xy_plot_lora_selector, xy_plot_lora_weights_state],
+        outputs=[xy_plot_lora_selector, xy_plot_lora_weights_df, xy_plot_lora_weights_state]
+    )
+
+    # Sync Dataframe edits back to state
+    def xy_plot_sync_lora_weights_from_df(df_data, current_weights):
+        if current_weights is None:
+            current_weights = {}
+        if df_data is not None and len(df_data) > 0:
+            for row in df_data:
+                if row and len(row) >= 2:
+                    lora_name = row[0]
+                    try:
+                        weight = float(row[1])
+                    except (ValueError, TypeError):
+                        weight = 1.0
+                    current_weights[lora_name] = weight
+        return current_weights
+
+    xy_plot_lora_weights_df.change(
+        fn=xy_plot_sync_lora_weights_from_df,
+        inputs=[xy_plot_lora_weights_df, xy_plot_lora_weights_state],
+        outputs=[xy_plot_lora_weights_state]
     )
 
     # --- Component Dictionary for Export ---
@@ -428,6 +456,6 @@ def create_xy_plot_ui(lora_names, default_prompt, DUMMY_LORA_NAME):
         "axis_z_value_text": xy_plot_axis_z_value_text,
         "axis_z_value_dropdown": xy_plot_axis_z_value_dropdown,
         "lora_selector": xy_plot_lora_selector,
-        "lora_sliders": xy_plot_lora_sliders,
+        "lora_weights_state": xy_plot_lora_weights_state,
     }
     return components
