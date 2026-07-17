@@ -222,6 +222,10 @@ if low_vram:
     print("Low VRAM detected: applying memory-saving overrides...")
     settings.set("gpu_memory_preservation", 1.0)
     settings.set("vae_batch_size", 4)
+    # Auto-enable 4-bit quantization for low VRAM GPUs
+    if not settings.get("use_4bit_quantization", False):
+        settings.set("use_4bit_quantization", True)
+        print("  Auto-enabled 4-bit NF4 quantization for low VRAM GPU")
     # Force MagCache with aggressive settings via defaults stored in settings
     if settings.get("cache_type", "MagCache") != "MagCache":
         settings.set("cache_type", "MagCache")

@@ -74,6 +74,9 @@ class VideoBaseModelGenerator(BaseModelGenerator):
         self.transformer.to(dtype=torch.bfloat16)
         self.transformer.requires_grad_(False)
         
+        # Apply 4-bit quantization if enabled (before DynamicSwapInstaller)
+        self._apply_4bit_quantization()
+        
         # Low VRAM: use DynamicSwapInstaller for CPU offloading
         if not self.high_vram:
             DynamicSwapInstaller.install_model(self.transformer, device=self.gpu)

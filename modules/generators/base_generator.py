@@ -53,8 +53,36 @@ class BaseModelGenerator(ABC):
         self.transformer = None
         self.gpu = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.cpu = torch.device("cpu")
+        
+        # Read 4-bit quantization setting from settings dict
+        self.use_4bit_quantization = False
+        if self.settings:
+            self.use_4bit_quantization = self.settings.get('use_4bit_quantization', False)
 
-            
+    def _apply_4bit_quantization(self):
+        """
+        Apply 4-bit NF4 quantization to the transformer model to reduce VRAM usage.
+        Only applies when use_4bit_quantization is True.
+        Requires bitsandbytes to be installed.
+        """
+        if not self.use_4bit_quantization:
+            return
+        
+        try:
+            from diffusers_helper.quantize import quantize_model_to_4bit
+            print(f"Applying 4-bit NF4 quantization to {self.get_model_name()} transformer...")
+            self.transformer = quantize_model_to_4bit(
+                self.transformer,
+                compute_dtype=torch.float16
+            )
+            print(f"4-bit NF4 quantization applied to {self.get_model_name()} transformer.")
+        except ImportError:
+            print("Warning: bitsandbytes not installed. Skipping 4-bit quantization.")
+            print("Install with: pip install bitsandbytes")
+        except Exception as e:
+            print(f"Warning: 4-bit quantization failed: {e}")
+            print("Continuing without quantization.")
+
     @abstractmethod
     def load_model(self):
         """

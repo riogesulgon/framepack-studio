@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Optional
 import torch
 import torch.nn as nn
-import bitsandbytes as bnb
 
 
 @torch.no_grad()
@@ -38,6 +37,14 @@ def quantize_model_to_4bit(
     # ------------------------------------------------------------------
     # Phase 1: collect all replacements (don't modify while iterating)
     # ------------------------------------------------------------------
+    try:
+        import bitsandbytes as bnb
+    except ImportError:
+        raise ImportError(
+            "bitsandbytes is required for 4-bit quantization. "
+            "Install it with: pip install bitsandbytes"
+        )
+
     replacements = []
 
     for name, module in model.named_modules():

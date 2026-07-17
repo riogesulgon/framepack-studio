@@ -945,12 +945,17 @@ def create_interface(
                 with gr.Row():
                     with gr.Column():
                         if low_vram:
-                            gr.Markdown("⚠️ **Low VRAM Detected (6GB or less).** Memory-saving overrides are active: gpu_memory_preservation=1.0, MagCache forced to aggressive settings. Expect slower generation. Consider keeping resolutions at 480×480 or lower, and latent_window_size ≤ 5.")
+                            gr.Markdown("⚠️ **Low VRAM Detected (6GB or less).** Memory-saving overrides are active: gpu_memory_preservation=1.0, MagCache forced to aggressive settings. Expect slower generation. Consider enabling **4-bit Quantization** (below) and keeping resolutions at 480×480 or lower, and latent_window_size ≤ 5.")
                         
                         save_metadata = gr.Checkbox(
                             label="Save Metadata", 
                             info="Save to JSON file", 
                             value=settings.get("save_metadata", 6),
+                        )
+                        use_4bit_quantization = gr.Checkbox(
+                            label="4-bit Quantization (NF4)",
+                            value=settings.get("use_4bit_quantization", False),
+                            info="Quantize the transformer to 4-bit (NF4) to reduce VRAM usage by ~60%. Recommended for GPUs with less than 8GB VRAM. May slightly reduce quality. Requires restart to take effect."
                         )
                         gpu_memory_preservation = gr.Slider(
                             label="Memory Buffer for Stability (VRAM GB)",
@@ -1083,7 +1088,7 @@ def create_interface(
                         status = gr.HTML("")
                         cleanup_output = gr.Textbox(label="Cleanup Status", interactive=False)
 
-                        def save_settings(save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup_val, hf_cache_blob_cleanup_val, hf_cache_blob_cleanup_dry_run_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val):
+                        def save_settings(save_metadata, use_4bit_quantization_val, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup_val, hf_cache_blob_cleanup_val, hf_cache_blob_cleanup_dry_run_val, latents_display_top_val, override_system_prompt_value, system_prompt_template_value, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, selected_theme, startup_model_type_val, startup_preset_name_val):
                             """Handles the manual 'Save Settings' button click."""
                             # This function is for the manual save button.
                             # It collects all current UI values and saves them.
@@ -1098,6 +1103,7 @@ def create_interface(
                                 
                                 settings.save_settings(
                                     save_metadata=save_metadata,
+                                    use_4bit_quantization=use_4bit_quantization_val,
                                     gpu_memory_preservation=gpu_memory_preservation,
                                     mp4_crf=mp4_crf,
                                     clean_up_videos=clean_up_videos,
@@ -1151,7 +1157,7 @@ def create_interface(
                         # REMOVE `cleanup_temp_folder` from the `inputs` list
                         save_btn.click(
                             fn=save_settings,
-                            inputs=[save_metadata, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup, hf_cache_blob_cleanup, hf_cache_blob_cleanup_dry_run, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown],
+                            inputs=[save_metadata, use_4bit_quantization, gpu_memory_preservation, mp4_crf, clean_up_videos, auto_cleanup_on_startup, hf_cache_blob_cleanup, hf_cache_blob_cleanup_dry_run, latents_display_top, override_system_prompt, system_prompt_template, output_dir, metadata_dir, lora_dir, gradio_temp_dir, auto_save, theme_dropdown, startup_model_type_dropdown, startup_preset_name_dropdown],
                             outputs=[status]
                         ).then(
                             # NEW: Update latents display layout after manual save
@@ -1185,6 +1191,7 @@ def create_interface(
                         )
 
                         # Add .change handlers for auto-saving individual settings
+                        use_4bit_quantization.change(lambda v: handle_individual_setting_change("use_4bit_quantization", v, "4-bit Quantization"), inputs=[use_4bit_quantization], outputs=[status])
                         save_metadata.change(lambda v: handle_individual_setting_change("save_metadata", v, "Save Metadata"), inputs=[save_metadata], outputs=[status])
                         gpu_memory_preservation.change(lambda v: handle_individual_setting_change("gpu_memory_preservation", v, "GPU Memory Preservation"), inputs=[gpu_memory_preservation], outputs=[status])
                         mp4_crf.change(lambda v: handle_individual_setting_change("mp4_crf", v, "MP4 Compression"), inputs=[mp4_crf], outputs=[status])
